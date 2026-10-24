@@ -24,3 +24,13 @@ With adjacency lists, BFS and DFS have worst-case time O(V+E) for standard graph
 
 ## 7. Validation, limitations and conclusion
 Local unit tests cover all algorithms' route reconstruction on a directed miniature graph, known shortest costs for UCS/A*, blockers, depth bounds, impossible reverse routes and identical endpoints. The live OSM Overpass endpoint and deployed Vercel instance must be tested separately; no live performance or quantitative advantage is claimed without measurements. The project demonstrates that optimized generalized-cost routing differs from minimum-edge routing, and that heuristic search trades search work against the possibility of suboptimal solutions. Real traffic, verified incident/safety data, and turn-by-turn navigation would require additional vetted data sources and engineering.
+
+## Version 3 correction and validation addendum (24 October 2026)
+
+- DFS, DLS and IDS now preserve path-local cycle detection instead of globally pruning branches based on an earlier visit at a different depth. Search caps still apply for computational safety.
+- Directed bidirectional BFS now computes full forward and reversed reachable traversals and joins at the minimum combined depth. This guarantees minimum edge count if the search completes, although the full expansion trades away much of bidirectional search's usual speed advantage.
+- Each returned search now includes bounded expansion snapshots (current node and up to 120 frontier nodes for up to 2,500 steps) for classroom visualization. Expansion count and displayed trace length can differ when capped.
+- 100/500-node experiments honor the selected blocked-road simulation scenario. They are induced subgraphs, and failure to connect endpoints is an authentic possible outcome rather than an algorithm bug.
+- Static checks: Python source compilation and JavaScript syntax validation passed; 9 automated unit tests passed, and the Flask HTTP route test was skipped in the offline authoring environment because Flask was not installed. A live Vercel/Overpass HTTP integration test must still be performed to establish successful deployment.
+
+**Claim boundary:** Real geographic roads are acquired from OpenStreetMap when the Overpass service responds. Congestion and road safety are constructed scenarios, not observed real-time conditions. This is an educational experiment tool, not turn-by-turn navigation.

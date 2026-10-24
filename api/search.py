@@ -29,62 +29,62 @@ def route_search(graph,start,goal,algorithm='astar',mode='weighted',traffic=.6,r
         for v,d,k,name in edges.get(u,[]):
             if v in allowed and frozenset((u,v)) not in blocked:
                 yield v,d,k,name,cost(u,v,d,k)
-    explored=[]; parents={start:None};found=False;frontier_peak=1
+    explored=[]; parents={start:None};found=False;frontier_peak=1; trace=[]
+    def record(u, frontier):
+        if len(trace)<2500:trace.append({'node':u,'frontier':list(frontier)[:120]})
     def capped():return len(explored)>=LIMIT
     if start==goal:found=True;explored.append(start)
     elif algorithm=='bfs':
         q=deque([start]);seen={start}
         while q and not capped():
-            frontier_peak=max(frontier_peak,len(q));u=q.popleft();explored.append(u)
+            frontier_peak=max(frontier_peak,len(q));u=q.popleft();explored.append(u);record(u,q)
             if u==goal:found=True;break
             for v,*_ in neighbor(u):
                 if v not in seen:seen.add(v);parents[v]=u;q.append(v)
     elif algorithm in ('dfs','dls','ids'):
         def visit(limit):
-            # Path-specific cycle detection allows alternative paths; depth-reach pruning is sound for DLS.
-            stack=[(start,0,(start,))];local={start:None};expanded=[];best={start:0};peak=1
+            # Tree-search with path-local cycle checking: does not discard a
+            # shallower alternate path based on an earlier deep encounter.
+            stack=[(start,(start,))];expanded=[];peak=1;steps=[]
             while stack and len(expanded)<LIMIT:
-                peak=max(peak,len(stack));u,level,path=stack.pop();expanded.append(u)
-                if u==goal:
-                    return list(path),expanded,peak
-                if level>=limit:continue
-                children=list(neighbor(u));children.reverse()
-                for v,*_ in children:
-                    if v not in path and level+1 < best.get(v,math.inf):
-                        best[v]=level+1;stack.append((v,level+1,path+(v,)))
-            return None,expanded,peak
+                peak=max(peak,len(stack));u,path=stack.pop();expanded.append(u)
+                if len(steps)<2500:steps.append({'node':u,'frontier':[x[0] for x in stack[-120:]]})
+                if u==goal:return path,expanded,peak,steps
+                if len(path)-1>=limit:continue
+                for v,*_ in reversed(list(neighbor(u))):
+                    if v not in path:stack.append((v,path+(v,)))
+            return None,expanded,peak,steps
         if algorithm=='ids':
             for limit in range(depth+1):
-                p,e,pk=visit(limit);explored.extend(e);frontier_peak=max(frontier_peak,pk)
+                p,e,pk,ts=visit(limit);explored.extend(e);trace.extend(ts[:max(0,2500-len(trace))]);frontier_peak=max(frontier_peak,pk)
                 if p:found=True;break
                 if capped():break
         else:
-            # DFS is unrestricted relative to the graph size, DLS honors the input bound
-            p,explored,frontier_peak=visit((len(allowed)-1) if algorithm=='dfs' else depth)
+            p,explored,frontier_peak,trace=visit(len(allowed)-1 if algorithm=='dfs' else depth)
             found=bool(p)
         if found:
             parents={p[0]:None}
             for a,b in zip(p,p[1:]):parents[b]=a
     elif algorithm=='bidirectional':
+        # Reverse BFS distances guarantee a minimum-edge path in a directed
+        # network, including streets with one-way movement.
         reverse={}
         for u in allowed:
             for v,*_ in neighbor(u):reverse.setdefault(v,[]).append(u)
-        qa=deque([start]);qb=deque([goal]);pa={start:None};pb={goal:None};meet=None
-        while qa and qb and not capped():
-            forward=len(qa)<=len(qb)
-            q,own,other=(qa,pa,pb) if forward else (qb,pb,pa)
-            for _ in range(len(q)):
-                u=q.popleft();explored.append(u)
-                if u in other:meet=u;break
-                adjacent=(v for v,*_ in neighbor(u)) if forward else iter(reverse.get(u,[]))
-                for v in adjacent:
-                    if v not in own:own[v]=u;q.append(v)
-                    if v in other:meet=v;break
-                if meet is not None:break
-                if capped():break
-            frontier_peak=max(frontier_peak,len(qa)+len(qb))
-            if meet is not None:break
-        if meet is not None:
+        qa=deque([start]);qb=deque([goal]);pa={start:None};pb={goal:None}
+        # Fully discover reachable levels on both sides; reconstruct via the
+        # meeting vertex minimizing dist(start,m)+dist(m,goal).
+        da={start:0};db={goal:0}
+        for q,own,dist,adj in ((qa,pa,da,lambda u:(v for v,*_ in neighbor(u))),
+                                (qb,pb,db,lambda u:iter(reverse.get(u,[])))):
+            while q and not capped():
+                frontier_peak=max(frontier_peak,len(q));u=q.popleft();explored.append(u);record(u,q)
+                for v in adj(u):
+                    if v not in dist:
+                        dist[v]=dist[u]+1;own[v]=u;q.append(v)
+        meets=da.keys() & db.keys()
+        if meets:
+            meet=min(meets,key=lambda u:(da[u]+db[u],str(u)))
             p=[];u=meet
             while u is not None:p.append(u);u=pa[u]
             p.reverse();u=pb[meet]
@@ -98,7 +98,7 @@ def route_search(graph,start,goal,algorithm='astar',mode='weighted',traffic=.6,r
             if not layer or capped():break
             frontier_peak=max(frontier_peak,len(layer));nxt=[]
             for u,path in layer:
-                explored.append(u)
+                explored.append(u);record(u,(x[0] for x in layer))
                 if u==goal:p=path;found=True;break
                 if capped():break
                 for v,*_ in neighbor(u):
@@ -117,7 +117,7 @@ def route_search(graph,start,goal,algorithm='astar',mode='weighted',traffic=.6,r
         while pq and not capped():
             frontier_peak=max(frontier_peak,len(pq));priority,_,u=heapq.heappop(pq)
             if u in closed:continue
-            closed.add(u);explored.append(u)
+            closed.add(u);explored.append(u);record(u,(item[2] for item in pq))
             if u==goal:found=True;break
             for v,d,k,name,c in neighbor(u):
                 if algorithm=='greedy':
@@ -142,4 +142,4 @@ def route_search(graph,start,goal,algorithm='astar',mode='weighted',traffic=.6,r
         if row is None:raise RuntimeError('Invalid path reconstruction')
         _,d,k,name=row;distance+=d;generalized+=cost(u,v,d,k);exposure+=d*risk_level(u,v,k)
         segments.append({'name':name,'km':round(d,4),'cost':round(cost(u,v,d,k),4),'risk':round(risk_level(u,v,k),3)})
-    return {'algorithm':algorithm,'path':path,'explored':explored[:5000],'expanded':len(explored),'distance':round(distance,4) if found else None,'cost':round(generalized,4) if found else None,'risk':round(exposure,4) if found else None,'steps':len(path)-1 if found else None,'segments':segments,'runtime_ms':round((time.perf_counter()-t0)*1000,3),'frontier_peak':frontier_peak,'optimality':'minimum edge count' if algorithm in ('bfs','bidirectional','ids') else 'minimum objective cost' if algorithm in ('ucs','astar') else 'not guaranteed','message':None if found else 'No route within selected limits; try another algorithm or remove blocks.'}
+    return {'algorithm':algorithm,'path':path,'explored':explored[:5000],'expanded':len(explored),'distance':round(distance,4) if found else None,'cost':round(generalized,4) if found else None,'risk':round(exposure,4) if found else None,'steps':len(path)-1 if found else None,'segments':segments,'runtime_ms':round((time.perf_counter()-t0)*1000,3),'frontier_peak':frontier_peak,'trace':trace,'optimality':'minimum edge count' if algorithm in ('bfs','bidirectional','ids') else 'minimum objective cost' if algorithm in ('ucs','astar') else 'not guaranteed','message':None if found else 'No route within selected limits; try another algorithm or remove blocks.'}

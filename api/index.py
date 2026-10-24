@@ -64,7 +64,7 @@ def route():
         for item in p.get('blocks',[])[:30]:
             near=nearest(item);blocks.extend(frozenset((near,v)) for v,*_ in g['edges'].get(near,[]))
         result=route_search(g,start,end,p.get('algorithm','astar'),p.get('mode','weighted'),min(3,max(0,float(p.get('traffic',0.6)))),min(3,max(0,float(p.get('risk',0.5)))),set(blocks),min(5,max(1,float(p.get('weight',1.5)))),min(500,max(1,int(p.get('depth',60)))),min(300,max(1,int(p.get('beam',25)))))
-        result['coordinates']=[nodes[x] for x in result.get('path',[])];result['explored_coordinates']=[nodes[x] for x in result.get('explored',[])];result['snapped_start']=nodes[start];result['snapped_end']=nodes[end];result['graph_nodes']=len(nodes);return jsonify(result)
+        result['trace_coordinates']=[{'node':nodes[step['node']],'frontier':[nodes[u] for u in step['frontier'] if u in nodes]} for step in result.get('trace',[])];result.pop('trace',None);result['coordinates']=[nodes[x] for x in result.get('path',[])];result['explored_coordinates']=[nodes[x] for x in result.get('explored',[])];result['snapped_start']=nodes[start];result['snapped_end']=nodes[end];result['graph_nodes']=len(nodes);return jsonify(result)
     except Exception as ex:return jsonify({'error':str(ex)}),400
 
 @app.get('/api/health')
@@ -93,12 +93,15 @@ def experiment():
     try:
         p=request.get_json(force=True);g=fetch_roads();nodes=g['nodes'];nearest=lambda xy:min(nodes,key=lambda k:distance(xy,nodes[k]))
         start=nearest(p['start']);goal=nearest(p['end']);rows=[]
+        blocked=set()
+        for item in p.get('blocks',[])[:30]:
+            u=nearest(item);blocked.update(frozenset((u,v)) for v,*_ in g['edges'].get(u,[]))
         # Reproducible induced subgraphs around endpoints using a deterministic spatial ranking.
         for size in (100,500):
             scored=sorted(nodes,key=lambda u:(distance(nodes[u],nodes[start])+distance(nodes[u],nodes[goal]),str(u)))
             allowed=set(scored[:size])|{start,goal}
             for alg in ('bfs','ucs','astar','greedy'):
-                r=route_search(g,start,goal,algorithm=alg,mode=p.get('mode','weighted'),traffic=float(p.get('traffic',.6)),risk=float(p.get('risk',.5)),allowed=allowed)
+                r=route_search(g,start,goal,algorithm=alg,mode=p.get('mode','weighted'),traffic=float(p.get('traffic',.6)),risk=float(p.get('risk',.5)),blocked=blocked,allowed=allowed)
                 rows.append({'graph_size':len(allowed),'algorithm':alg,'distance':r['distance'],'cost':r['cost'],'expanded':r['expanded'],'runtime_ms':r['runtime_ms']})
         return jsonify({'results':rows,'method':'Deterministic top-N geographic induced subgraph containing both selected endpoints. Disconnection is possible; null cost means no route. Timings are server runtime per run, not benchmark averages.','graph_nodes':len(nodes)})
     except Exception as ex:return jsonify({'error':str(ex)}),400
