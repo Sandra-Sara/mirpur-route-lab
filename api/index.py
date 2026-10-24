@@ -54,6 +54,9 @@ def graph():
     except Exception as ex:return jsonify({'error':str(ex)}),503
 
 from api.search import route_search, haversine
+def scenario_kwargs(p):
+    return dict(incident=p.get('incident','rescue'),time_of_day=p.get('time_of_day','midday'),weather=p.get('weather','winter'),priority=p.get('priority','balanced'),vehicle=p.get('vehicle','ambulance'))
+
 
 @app.post('/api/route')
 def route():
@@ -63,7 +66,7 @@ def route():
         start=nearest(p['start']);end=nearest(p['end']);blocks=[]
         for item in p.get('blocks',[])[:30]:
             near=nearest(item);blocks.extend(frozenset((near,v)) for v,*_ in g['edges'].get(near,[]))
-        result=route_search(g,start,end,p.get('algorithm','astar'),p.get('mode','weighted'),min(3,max(0,float(p.get('traffic',0.6)))),min(3,max(0,float(p.get('risk',0.5)))),set(blocks),min(5,max(1,float(p.get('weight',1.5)))),min(500,max(1,int(p.get('depth',60)))),min(300,max(1,int(p.get('beam',25)))))
+        result=route_search(g,start,end,p.get('algorithm','astar'),p.get('mode','weighted'),min(3,max(0,float(p.get('traffic',0.6)))),min(3,max(0,float(p.get('risk',0.5)))),set(blocks),min(5,max(1,float(p.get('weight',1.5)))),min(500,max(1,int(p.get('depth',60)))),min(300,max(1,int(p.get('beam',25)))),**scenario_kwargs(p))
         result['trace_coordinates']=[{'node':nodes[step['node']],'frontier':[nodes[u] for u in step['frontier'] if u in nodes]} for step in result.get('trace',[])];result.pop('trace',None);result['coordinates']=[nodes[x] for x in result.get('path',[])];result['explored_coordinates']=[nodes[x] for x in result.get('explored',[])];result['snapped_start']=nodes[start];result['snapped_end']=nodes[end];result['graph_nodes']=len(nodes);return jsonify(result)
     except Exception as ex:return jsonify({'error':str(ex)}),400
 
@@ -80,11 +83,11 @@ def compare():
         start=nearest(p['start']);goal=nearest(p['end']);blocked=set()
         for item in p.get('blocks',[])[:30]:
             u=nearest(item);blocked.update(frozenset((u,v)) for v,*_ in g['edges'].get(u,[]))
-        opts={'mode':p.get('mode','weighted'),'traffic':min(3,max(0,float(p.get('traffic',.6)))),'risk':min(3,max(0,float(p.get('risk',.5)))),'blocked':blocked,'depth':min(500,max(1,int(p.get('depth',60)))),'beam':min(300,max(1,int(p.get('beam',25)))),'weight':min(5,max(1,float(p.get('weight',1.5))))}
+        opts={'mode':p.get('mode','weighted'),'traffic':min(3,max(0,float(p.get('traffic',.6)))),'risk':min(3,max(0,float(p.get('risk',.5)))),'blocked':blocked,'depth':min(500,max(1,int(p.get('depth',60)))),'beam':min(300,max(1,int(p.get('beam',25)))),'weight':min(5,max(1,float(p.get('weight',1.5)))),**scenario_kwargs(p)}
         rows=[]
         for alg in ('bfs','dfs','dls','ids','ucs','bidirectional','greedy','astar','weighted','beam'):
             r=route_search(g,start,goal,algorithm=alg,**opts)
-            rows.append({k:r[k] for k in ('algorithm','expanded','distance','cost','runtime_ms','frontier_peak','steps','optimality')})
+            rows.append({k:r[k] for k in ('algorithm','expanded','distance','cost','eta_minutes','runtime_ms','frontier_peak','steps','optimality')})
         return jsonify({'results':rows,'graph_nodes':len(nodes),'start':nodes[start],'end':nodes[goal]})
     except Exception as ex:return jsonify({'error':str(ex)}),400
 
@@ -97,11 +100,12 @@ def experiment():
         for item in p.get('blocks',[])[:30]:
             u=nearest(item);blocked.update(frozenset((u,v)) for v,*_ in g['edges'].get(u,[]))
         # Reproducible induced subgraphs around endpoints using a deterministic spatial ranking.
-        for size in (100,500):
+        requested=min(1500,max(10,int(p.get('node_count',100))))
+        for size in dict.fromkeys((requested,100,500)):
             scored=sorted(nodes,key=lambda u:(distance(nodes[u],nodes[start])+distance(nodes[u],nodes[goal]),str(u)))
             allowed=set(scored[:size])|{start,goal}
             for alg in ('bfs','ucs','astar','greedy'):
-                r=route_search(g,start,goal,algorithm=alg,mode=p.get('mode','weighted'),traffic=float(p.get('traffic',.6)),risk=float(p.get('risk',.5)),blocked=blocked,allowed=allowed)
-                rows.append({'graph_size':len(allowed),'algorithm':alg,'distance':r['distance'],'cost':r['cost'],'expanded':r['expanded'],'runtime_ms':r['runtime_ms']})
+                r=route_search(g,start,goal,algorithm=alg,mode=p.get('mode','weighted'),traffic=float(p.get('traffic',.6)),risk=float(p.get('risk',.5)),blocked=blocked,allowed=allowed,**scenario_kwargs(p))
+                rows.append({'graph_size':len(allowed),'algorithm':alg,'distance':r['distance'],'cost':r['cost'],'eta_minutes':r['eta_minutes'],'expanded':r['expanded'],'runtime_ms':r['runtime_ms']})
         return jsonify({'results':rows,'method':'Deterministic top-N geographic induced subgraph containing both selected endpoints. Disconnection is possible; null cost means no route. Timings are server runtime per run, not benchmark averages.','graph_nodes':len(nodes)})
     except Exception as ex:return jsonify({'error':str(ex)}),400

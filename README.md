@@ -52,3 +52,9 @@ git push origin main
 ## Test
 
 `python -m unittest discover -s tests -v` for graph-level regression checks; production OSM/Overpass integration still requires internet testing.
+
+
+## Emergency dispatch scenario controls (v4)
+Incident: rescue, medical emergency, fire response, snatching, robbery, theft. Independent departure/destination landmark dropdowns or map clicks. Traffic: 0.15 / 0.45 / 0.85. Benchmark node count: 10–1500 (and reference 100/500 graphs). Time: morning/midday/evening/night. Weather: summer/monsoon/winter. Priority: balanced/fastest/avoid congestion. Vehicles: ambulance/fire engine/rescue van/police patrol.
+
+All dispatch effects are deterministic educational *simulation*, not observed traffic, official emergency service speeds, verified road access or public safety information. Road geometry is requested from OpenStreetMap. Mode **Distance** deliberately ignores dispatch penalties; use **Weighted** to make scenario settings affect optimization. ETA is a modeled estimate, not travel advice. Benchmark graphs may be disconnected.

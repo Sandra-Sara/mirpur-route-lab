@@ -9,7 +9,7 @@ def haversine(a,b):
     x=math.sin((lat2-lat1)/2)**2+math.cos(lat1)*math.cos(lat2)*math.sin((lon2-lon1)/2)**2
     return 12742*math.asin(min(1,math.sqrt(x)))
 
-def route_search(graph,start,goal,algorithm='astar',mode='weighted',traffic=.6,risk=.5,blocked=None,weight=1.5,depth=60,beam=25,allowed=None):
+def route_search(graph,start,goal,algorithm='astar',mode='weighted',traffic=.6,risk=.5,blocked=None,weight=1.5,depth=60,beam=25,allowed=None,incident='rescue',time_of_day='midday',weather='winter',priority='balanced',vehicle='ambulance'):
     t0=time.perf_counter();nodes=graph['nodes'];edges=graph['edges'];blocked=blocked or set()
     if start not in nodes or goal not in nodes:raise ValueError('Invalid selected nodes')
     if algorithm not in {'bfs','dfs','dls','ids','ucs','bidirectional','greedy','astar','weighted','beam'}:raise ValueError('Unknown algorithm')
@@ -21,10 +21,31 @@ def route_search(graph,start,goal,algorithm='astar',mode='weighted',traffic=.6,r
     def risk_level(u,v,kind):
         seed=sum((i+1)*ord(ch) for i,ch in enumerate('|'.join(sorted((str(u),str(v))))) )%997/997
         return (0.25 if kind in ('primary','secondary','trunk') else .55)+.40*seed
+    INCIDENTS={'rescue','medical','fire','snatching','robbery','theft'}
+    TIMES={'morning':1.20,'midday':1.0,'evening':1.45,'night':0.70}
+    WEATHER={'summer':1.0,'monsoon':1.40,'winter':1.13}
+    VEHICLES={'ambulance':1.0,'fire_engine':0.76,'rescue_van':0.90,'police_patrol':1.10}
+    PRIORITIES={'balanced','fastest','avoid_congestion'}
+    if incident not in INCIDENTS or time_of_day not in TIMES or weather not in WEATHER or priority not in PRIORITIES or vehicle not in VEHICLES:
+        raise ValueError('Invalid emergency dispatch scenario')
+    arterial={'motorway','trunk','primary','secondary','tertiary','primary_link','secondary_link','tertiary_link'}
+    def conditions(u,v,kind):
+        q=risk_level(u,v,kind)
+        road_congestion=(.65 if kind in arterial else .25)+.35*(q%1)
+        congestion=min(2.5,max(0,float(traffic))*TIMES[time_of_day]*WEATHER[weather]*road_congestion)
+        speed=(42 if kind in arterial else 23)*VEHICLES[vehicle]
+        if vehicle=='fire_engine' and kind in {'living_street','service'}:speed*=.65
+        # All quantities are deterministic scenario estimates, not live observations.
+        minutes=60/(max(5,speed))*(1+congestion)
+        return q,congestion,minutes
     def cost(u,v,d,kind):
-        q=risk_level(u,v,kind);c=.65 if kind in ('primary','secondary','trunk') else .25
-        congestion=c+.35*(q%1)
-        return d if mode=='distance' else d*(1+traffic*congestion+risk*q)
+        q,c,minutes_per_km=conditions(u,v,kind)
+        if mode=='distance':return d
+        if priority=='fastest':return d*(1+minutes_per_km/2)
+        if priority=='avoid_congestion':return d*(1+2.2*c+.3*risk*q)
+        incident_risk={'rescue':.8,'medical':.65,'fire':1.0,'snatching':1.2,'robbery':1.5,'theft':1.1}[incident]
+        return d*(1+0.8*c+risk*q*incident_risk+minutes_per_km/8)
+
     def neighbor(u):
         for v,d,k,name in edges.get(u,[]):
             if v in allowed and frozenset((u,v)) not in blocked:
@@ -115,7 +136,7 @@ def route_search(graph,start,goal,algorithm='astar',mode='weighted',traffic=.6,r
     else:
         pq=[];serial=0;gscore={start:0};heapq.heappush(pq,(heuristic(start) if algorithm in ('astar','greedy') else weight*heuristic(start) if algorithm=='weighted' else 0,0,start));closed=set()
         while pq and not capped():
-            frontier_peak=max(frontier_peak,len(pq));priority,_,u=heapq.heappop(pq)
+            frontier_peak=max(frontier_peak,len(pq));popped_priority,_,u=heapq.heappop(pq)
             if u in closed:continue
             closed.add(u);explored.append(u);record(u,(item[2] for item in pq))
             if u==goal:found=True;break
@@ -136,10 +157,10 @@ def route_search(graph,start,goal,algorithm='astar',mode='weighted',traffic=.6,r
         u=goal
         while u is not None and len(path)<=len(allowed):path.append(u);u=parents[u]
         path.reverse()
-    distance=generalized=exposure=0.;segments=[]
+    distance=generalized=exposure=eta=0.;segments=[]
     for u,v in zip(path,path[1:]):
         row=next((e for e in edges.get(u,[]) if e[0]==v),None)
         if row is None:raise RuntimeError('Invalid path reconstruction')
-        _,d,k,name=row;distance+=d;generalized+=cost(u,v,d,k);exposure+=d*risk_level(u,v,k)
+        _,d,k,name=row;distance+=d;generalized+=cost(u,v,d,k);exposure+=d*risk_level(u,v,k);eta+=d*conditions(u,v,k)[2]
         segments.append({'name':name,'km':round(d,4),'cost':round(cost(u,v,d,k),4),'risk':round(risk_level(u,v,k),3)})
-    return {'algorithm':algorithm,'path':path,'explored':explored[:5000],'expanded':len(explored),'distance':round(distance,4) if found else None,'cost':round(generalized,4) if found else None,'risk':round(exposure,4) if found else None,'steps':len(path)-1 if found else None,'segments':segments,'runtime_ms':round((time.perf_counter()-t0)*1000,3),'frontier_peak':frontier_peak,'trace':trace,'optimality':'minimum edge count' if algorithm in ('bfs','bidirectional','ids') else 'minimum objective cost' if algorithm in ('ucs','astar') else 'not guaranteed','message':None if found else 'No route within selected limits; try another algorithm or remove blocks.'}
+    return {'algorithm':algorithm,'path':path,'explored':explored[:5000],'expanded':len(explored),'distance':round(distance,4) if found else None,'cost':round(generalized,4) if found else None,'risk':round(exposure,4) if found else None,'eta_minutes':round(eta,1) if found else None,'scenario':{'incident':incident,'time_of_day':time_of_day,'weather':weather,'priority':priority,'vehicle':vehicle,'traffic':traffic},'steps':len(path)-1 if found else None,'segments':segments,'runtime_ms':round((time.perf_counter()-t0)*1000,3),'frontier_peak':frontier_peak,'trace':trace,'optimality':'minimum edge count' if algorithm in ('bfs','bidirectional','ids') else 'minimum objective cost' if algorithm in ('ucs','astar') else 'not guaranteed','message':None if found else 'No route within selected limits; try another algorithm or remove blocks.'}
