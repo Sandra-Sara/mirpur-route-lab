@@ -70,3 +70,8 @@ This ZIP is an **overlay of the existing `mirpur-route-lab` repo**, not a replac
 
 ### v6: All ten algorithm dynamic charts
 The same seven chart domains now include BFS, DFS, DLS, IDS, UCS, Bidirectional BFS, Greedy Best-First, A*, Weighted A*, and Beam Search under all three synthetic traffic levels (30 benchmark runs). DLS/IDS/Beam can return N/A for limited depths or beam widths; that is a valid and visible outcome, not a fabricated route. The benchmark honors the sidebar depth, beam-width, and heuristic-weight inputs (depth is capped at 12 for the benchmark to limit serverless work). For large graphs, execution can still be slow; use smaller samples.
+
+## Two-mode dashboard (v7)
+Choose **Route Simulation** for the original ten algorithms and dynamic traffic/cost graphs, or **Emergency Response** for a separate educational dispatch allocation view.
+Emergency Response offers 100/150/250 synthetic incidents, ambulance/rescue/fire units, capability and remaining-capacity constraints, simulated blocked zones, configurable 120-minute default deadline, summary statistics, a map, detailed request allocation, and comparisons between bounded heuristic CSP-inspired strategies.
+**Limitation:** emergency assignments use Haversine estimates and synthetic detour multipliers, not actual OSM shortest-path travel times; no unit is dispatched in reality. The CSP-like heuristics are not proof of global optimum, and traffic/safety are simulated. Emergency map markers indicate modelled locations only.

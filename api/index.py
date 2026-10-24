@@ -161,3 +161,25 @@ def benchmark_graphs():
               'description':'Connected directed BFS sample from selected start. All 10 algorithms × three synthetic traffic levels; depth-limited searches can return N/A, and runtimes are single measurements.'}})
     except Exception as ex:
         return jsonify({'error':str(ex)}),400
+
+from api.dispatch import run_scenario
+@app.post('/api/emergency-dispatch')
+def emergency_dispatch():
+    try:
+        p=request.get_json(force=True) or {}
+        opts={k:p[k] for k in ('count','ambulances','rescue_vans','fire_engines','seed','traffic','deadline','blocked_zones','algorithm') if k in p}
+        return jsonify(run_scenario(**opts))
+    except (ValueError,TypeError,KeyError) as ex:
+        return jsonify({'error':str(ex)}),400
+
+@app.post('/api/dispatch-compare')
+def dispatch_compare():
+    try:
+        p=request.get_json(force=True) or {}
+        opts={k:p[k] for k in ('count','ambulances','rescue_vans','fire_engines','seed','traffic','deadline','blocked_zones') if k in p}
+        rows=[]
+        for strategy in ('backtracking','backjumping','forward_checking','local_search'):
+            o=run_scenario(**opts,algorithm=strategy)['stats']
+            rows.append({'strategy':strategy,'assigned':o['allocated'],'unassigned':o['unallocated'],'mean_response_min':o['mean_response_min'],'runtime_ms':o['solver_runtime_ms'],'constraint_checks':o['constraint_checks']})
+        return jsonify({'rows':rows,'note':'Heuristic bounded solver variants, not complete CSP optimality claims; results are deterministic synthetic scenarios.'})
+    except (ValueError,TypeError,KeyError) as ex:return jsonify({'error':str(ex)}),400
