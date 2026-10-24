@@ -109,3 +109,52 @@ def experiment():
                 rows.append({'graph_size':len(allowed),'algorithm':alg,'distance':r['distance'],'cost':r['cost'],'eta_minutes':r['eta_minutes'],'expanded':r['expanded'],'runtime_ms':r['runtime_ms']})
         return jsonify({'results':rows,'method':'Deterministic top-N geographic induced subgraph containing both selected endpoints. Disconnection is possible; null cost means no route. Timings are server runtime per run, not benchmark averages.','graph_nodes':len(nodes)})
     except Exception as ex:return jsonify({'error':str(ex)}),400
+
+
+@app.post('/api/benchmark-graphs')
+def benchmark_graphs():
+    """Repeatable graph benchmark on a connected sample of real OSM road vertices."""
+    try:
+        p=request.get_json(force=True) or {}
+        g=fetch_roads();nodes=g['nodes'];edges=g['edges']
+        count=min(1500,max(10,int(p.get('node_count',100))))
+        objective=p.get('benchmark_objective','composite')
+        if objective not in ('distance','time','safety','composite'):
+            return jsonify({'error':'Invalid benchmark objective'}),400
+        coords=p.get('start',[23.8069,90.3687]); anchor=min(nodes,key=lambda k:distance(coords,nodes[k]))
+        # Directed traversability preserved; BFS reachable vertex sampling, not random disconnected points.
+        queue=deque([anchor]);allowed={anchor};order=[anchor]
+        while queue and len(allowed)<count:
+            u=queue.popleft()
+            for v,*_ in edges.get(u,[]):
+                if v in nodes and v not in allowed:
+                    allowed.add(v);order.append(v);queue.append(v)
+                    if len(allowed)>=count:break
+        if len(order)<10:raise ValueError('Insufficient connected roads for this sample')
+        # Choose a repeatable reachable pair: the anchor and the most distant in-sample vertex.
+        goal=max(order,key=lambda x:distance(nodes[anchor],nodes[x]))
+        algorithms=('bfs','dfs','greedy','ucs','astar','ids')
+        levels=(('Low',.15),('Medium',.45),('High',.85))
+        rows=[]
+        for alg in algorithms:
+            for label,traffic in levels:
+                r=route_search(g,anchor,goal,algorithm=alg,mode=objective,
+                     traffic=traffic,risk=float(p.get('risk',.5)),allowed=allowed,
+                     depth=min(20,max(4,int(p.get('depth',14)))),**scenario_kwargs(p))
+                # Transparent derived scores from returned route/segment data.
+                seg=r.get('segments',[])
+                risk=r.get('risk')
+                dist=r.get('distance')
+                safety=round((dist or 0)+float(p.get('risk',.5))*(risk or 0),4) if dist is not None else None
+                composite=round((r.get('eta_minutes') or 0)+4*float(p.get('risk',.5))*(risk or 0),4) if dist is not None else None
+                rows.append({'algorithm':alg.upper() if alg!='greedy' else 'GBFS',
+                    'traffic':label,'traffic_value':traffic,'expanded':r['expanded'],
+                    'distance':dist,'travel_time':r['eta_minutes'],
+                    'composite':composite,'safety':safety,'risk':risk,
+                    'runtime':r['runtime_ms'],'found':dist is not None})
+        return jsonify({'rows':rows,'basis':{'requested_nodes':count,'sample_nodes':len(allowed),
+              'start':nodes[anchor],'goal':nodes[goal], 'pair_count':1,
+              'objective':objective,'source':'OpenStreetMap road geometry; simulated traffic and risk',
+              'description':'Connected directed BFS sample from selected start. Single reachable source/target pair; algorithms may fail within depth constraints. Runtime is a single measurement per algorithm.'}})
+    except Exception as ex:
+        return jsonify({'error':str(ex)}),400

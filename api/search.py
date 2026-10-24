@@ -13,7 +13,7 @@ def route_search(graph,start,goal,algorithm='astar',mode='weighted',traffic=.6,r
     t0=time.perf_counter();nodes=graph['nodes'];edges=graph['edges'];blocked=blocked or set()
     if start not in nodes or goal not in nodes:raise ValueError('Invalid selected nodes')
     if algorithm not in {'bfs','dfs','dls','ids','ucs','bidirectional','greedy','astar','weighted','beam'}:raise ValueError('Unknown algorithm')
-    if mode not in {'distance','weighted'}:raise ValueError('Unknown objective')
+    if mode not in {'distance','weighted','time','safety','composite'}:raise ValueError('Unknown objective')
     allowed=set(nodes) if allowed is None else set(allowed)
     if start not in allowed or goal not in allowed:raise ValueError('Endpoints outside experiment subgraph')
     depth=max(0,int(depth));beam=max(1,int(beam));weight=max(1,float(weight))
@@ -41,6 +41,9 @@ def route_search(graph,start,goal,algorithm='astar',mode='weighted',traffic=.6,r
     def cost(u,v,d,kind):
         q,c,minutes_per_km=conditions(u,v,kind)
         if mode=='distance':return d
+        if mode=='time':return d*minutes_per_km
+        if mode=='safety':return d*(1+risk*q+c*.15)
+        if mode=='composite':return d*(minutes_per_km+risk*q*4+c*2)
         if priority=='fastest':return d*(1+minutes_per_km/2)
         if priority=='avoid_congestion':return d*(1+2.2*c+.3*risk*q)
         incident_risk={'rescue':.8,'medical':.65,'fire':1.0,'snatching':1.2,'robbery':1.5,'theft':1.1}[incident]
