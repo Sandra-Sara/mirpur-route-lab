@@ -75,3 +75,36 @@ The same seven chart domains now include BFS, DFS, DLS, IDS, UCS, Bidirectional 
 Choose **Route Simulation** for the original ten algorithms and dynamic traffic/cost graphs, or **Emergency Response** for a separate educational dispatch allocation view.
 Emergency Response offers 100/150/250 synthetic incidents, ambulance/rescue/fire units, capability and remaining-capacity constraints, simulated blocked zones, configurable 120-minute default deadline, summary statistics, a map, detailed request allocation, and comparisons between bounded heuristic CSP-inspired strategies.
 **Limitation:** emergency assignments use Haversine estimates and synthetic detour multipliers, not actual OSM shortest-path travel times; no unit is dispatched in reality. The CSP-like heuristics are not proof of global optimum, and traffic/safety are simulated. Emergency map markers indicate modelled locations only.
+
+## Fix: Overpass 'read operation timed out' on Vercel
+
+Vercel functions do not share a persistent Python memory cache. Querying Mirpur's entire road network from Overpass during an HTTP request is unreliable. **For production, bundle an actual OSM road snapshot** and let the Flask API load it immediately without calling Overpass. The application never fabricates road geometry.
+
+On Ubuntu in this existing Git repository, run:
+
+```bash
+python3 scripts/cache_mirpur_roads.py
+```
+
+This standard-library-only script downloads four small pieces of the original Mirpur bounding box, merges the real OpenStreetMap ways, and writes `data/mirpur_roads.json.gz`. If a mirror times out it tries another; if all fail, try again later. You can also provide a saved Overpass JSON response with `--from-json path/to/overpass.json`.
+
+Then commit and redeploy to **the same existing Vercel project**:
+
+```bash
+git add api/index.py scripts/cache_mirpur_roads.py data/mirpur_roads.json.gz tests/test_snapshot.py README.md
+git commit -m "Bundle Mirpur road graph to prevent Overpass timeouts"
+git push origin main
+```
+
+Before uploading the snapshot, `GET /api/health` should return `"snapshot_available": true` locally. After Vercel redeploys, the same endpoint confirms the snapshot was bundled. Live map tiles are independent of the road graph; seeing the base map does not imply route graph availability. The bundled snapshot is a fixed OSM data extract and is not live traffic information. To update the geometry later, rerun with `--force` and commit the new snapshot.
+
+
+## A* Heuristic Inspector
+
+The route explorer includes a synchronized heuristic inspector for A*, Weighted A*, and Greedy Best-First Search. Moving the expansion slider or using Play / Next Step updates the selected node's recorded `g(n)`, Haversine `h(n)`, queue priority `f(n)`, coordinates, and recent expansion history.
+
+- A*: `f(n) = g(n) + h(n)`
+- Weighted A*: `f(n) = g(n) + w × h(n)`
+- Greedy Best-First: queue priority is `h(n)` (the trace also reports accumulated `g(n)` for context).
+
+Important unit note: `h(n)` is Haversine distance in kilometres. `g(n)` is accumulated edge cost in the selected objective's units. Those units may differ in time, safety, weighted, or composite modes. The inspector displays the values actually used by the implementation; it does not claim the heuristic is admissible for every objective.

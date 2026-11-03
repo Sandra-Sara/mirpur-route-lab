@@ -54,8 +54,32 @@ def route_search(graph,start,goal,algorithm='astar',mode='weighted',traffic=.6,r
             if v in allowed and frozenset((u,v)) not in blocked:
                 yield v,d,k,name,cost(u,v,d,k)
     explored=[]; parents={start:None};found=False;frontier_peak=1; trace=[]
-    def record(u, frontier):
-        if len(trace)<2500:trace.append({'node':u,'frontier':list(frontier)[:120]})
+    def record(u, frontier, gscore=None, popped_priority=None):
+        if len(trace) >= 2500:
+            return
+        entry = {'node': u, 'frontier': list(frontier)[:120]}
+        # Numerical search trace is captured for heuristic-driven algorithms.
+        if gscore is not None and algorithm in ('astar', 'weighted', 'greedy'):
+            gn = float(gscore.get(u, 0.0))
+            hn = float(heuristic(u))
+            if algorithm == 'greedy':
+                formula = 'h(n)'
+                fn = hn
+            elif algorithm == 'weighted':
+                formula = 'g(n) + w × h(n)'
+                fn = gn + weight * hn
+            else:
+                formula = 'g(n) + h(n)'
+                fn = gn + hn
+            entry.update({
+                'g': gn,
+                'h': hn,
+                'f': float(popped_priority if popped_priority is not None else fn),
+                'formula': formula,
+                'algorithm': algorithm,
+                'weight': weight if algorithm == 'weighted' else None
+            })
+        trace.append(entry)
     def capped():return len(explored)>=LIMIT
     if start==goal:found=True;explored.append(start)
     elif algorithm=='bfs':
@@ -141,7 +165,7 @@ def route_search(graph,start,goal,algorithm='astar',mode='weighted',traffic=.6,r
         while pq and not capped():
             frontier_peak=max(frontier_peak,len(pq));popped_priority,_,u=heapq.heappop(pq)
             if u in closed:continue
-            closed.add(u);explored.append(u);record(u,(item[2] for item in pq))
+            closed.add(u);explored.append(u);record(u,(item[2] for item in pq),gscore,popped_priority)
             if u==goal:found=True;break
             for v,d,k,name,c in neighbor(u):
                 if algorithm=='greedy':
