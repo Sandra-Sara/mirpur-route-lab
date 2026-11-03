@@ -1,4 +1,4 @@
-import json, math, os, heapq, time, urllib.request, urllib.parse
+import json, math, os, heapq, time, urllib.request, urllib.parse, gzip
 from collections import deque
 from flask import Flask, request, jsonify, send_from_directory
 
@@ -6,6 +6,44 @@ app=Flask(__name__,static_folder='../static')
 ROOT=os.path.dirname(os.path.dirname(__file__))
 BBOX=(23.778,90.335,23.840,90.405)
 _CACHE={'when':0,'data':None}
+SNAPSHOT=os.path.join(ROOT,'data','mirpur_roads.json.gz')
+
+def read_snapshot():
+    if not os.path.isfile(SNAPSHOT):return None
+    with gzip.open(SNAPSHOT,'rt',encoding='utf-8') as stream:
+        graph=json.load(stream)
+    if not isinstance(graph.get('nodes'),dict) or not isinstance(graph.get('edges'),dict) or len(graph['nodes'])<100:
+        raise ValueError('Bundled road snapshot is invalid')
+    graph['source']='OpenStreetMap snapshot (bundled; not live traffic)'
+    return graph
+
+
+
+def simulated_fallback_graph():
+    """Clearly labelled, connected demonstration graph; NOT actual OSM road geometry.
+
+    Used only when an OSM snapshot is missing and the provider cannot respond.
+    Coordinates lie inside the Mirpur study area; straight grid edges are synthetic.
+    """
+    size=32
+    south,west,north,east=BBOX
+    nodes={}; edges={}
+    for i in range(size):
+        for j in range(size):
+            ident=f"sim-{i}-{j}"
+            nodes[ident]=[round(south+(north-south)*i/(size-1),7),
+                          round(west+(east-west)*j/(size-1),7)]
+    for i in range(size):
+        for j in range(size):
+            a=f"sim-{i}-{j}"
+            for ni,nj in ((i-1,j),(i+1,j),(i,j-1),(i,j+1)):
+                if 0<=ni<size and 0<=nj<size:
+                    b=f"sim-{ni}-{nj}"
+                    edges.setdefault(a,[]).append([b,round(distance(nodes[a],nodes[b]),6),
+                                                   'residential','SIMULATED LINK'])
+    return {'nodes':nodes,'edges':edges,'ways':size*(size-1)*2,
+            'source':'SIMULATED FALLBACK GRID — not real roads; no OSM routing accuracy',
+            'updated':int(time.time()),'simulated':True}
 
 @app.get('/')
 def home():return send_from_directory(os.path.join(ROOT,'static'),'index.html')
@@ -17,15 +55,21 @@ def distance(a,b):
     return 2*r*math.asin(min(1,math.sqrt(v)))
 
 def fetch_roads():
-    if _CACHE['data'] and time.time()-_CACHE['when']<3600:return _CACHE['data']
+    # Use repository-backed road data first: Vercel instances have independent ephemeral memory.
+    if _CACHE['data'] and (_CACHE['data'].get('source','').startswith('OpenStreetMap snapshot') or time.time()-_CACHE['when']<3600):
+        return _CACHE['data']
+    snapshot=read_snapshot()
+    if snapshot is not None:
+        _CACHE.update({'when':time.time(),'data':snapshot})
+        return snapshot
     s,w,n,e=BBOX
     q=f'''[out:json][timeout:24];(way["highway"~"^(motorway|trunk|primary|secondary|tertiary|residential|unclassified|living_street|service|primary_link|secondary_link|tertiary_link)$"]({s},{w},{n},{e}););out geom;'''
     errors=[]
-    for host in ['https://overpass.kumi.systems/api/interpreter','https://overpass-api.de/api/interpreter','https://overpass.nchc.org.tw/api/interpreter']:
+    for host in ['https://overpass.kumi.systems/api/interpreter','https://overpass-api.de/api/interpreter']:
         try:
             payload=urllib.parse.urlencode({'data':q}).encode()
             req=urllib.request.Request(host,data=payload,headers={'User-Agent':'MirpurRouteLab/1.0 (educational mapping application)','Content-Type':'application/x-www-form-urlencoded'})
-            with urllib.request.urlopen(req,timeout=29) as resp: raw=json.load(resp)
+            with urllib.request.urlopen(req,timeout=3) as resp: raw=json.load(resp)
             nodes={}; edges={}; ways=[]
             for way in raw.get('elements',[]):
                 if way.get('type')!='way' or len(way.get('geometry',[]))<2:continue
@@ -45,12 +89,16 @@ def fetch_roads():
             if len(nodes)<100:raise RuntimeError('Road network response too small')
             _CACHE.update({'when':time.time(),'data':graph});return graph
         except Exception as ex:errors.append(str(ex)[:120])
-    raise RuntimeError('OpenStreetMap road data could not be loaded. Please retry. '+'; '.join(errors[:1]))
+    # Do not leave the entire application broken when Overpass is unavailable.
+    # This fallback is pedagogical only; it must never be described as real roads.
+    fallback=simulated_fallback_graph()
+    _CACHE.update({'when':time.time(),'data':fallback})
+    return fallback
 
 @app.get('/api/graph')
 def graph():
     try:
-        g=fetch_roads();return jsonify({'nodes':g['nodes'],'edgeCount':sum(map(len,g['edges'].values())),'ways':g['ways'],'source':g['source'],'updated':g['updated']})
+        g=fetch_roads();return jsonify({'nodes':g['nodes'],'edgeCount':sum(map(len,g['edges'].values())),'ways':g['ways'],'source':g['source'],'updated':g['updated'],'simulated':g.get('simulated',False)})
     except Exception as ex:return jsonify({'error':str(ex)}),503
 
 from api.search import route_search, haversine
@@ -67,11 +115,11 @@ def route():
         for item in p.get('blocks',[])[:30]:
             near=nearest(item);blocks.extend(frozenset((near,v)) for v,*_ in g['edges'].get(near,[]))
         result=route_search(g,start,end,p.get('algorithm','astar'),p.get('mode','weighted'),min(3,max(0,float(p.get('traffic',0.6)))),min(3,max(0,float(p.get('risk',0.5)))),set(blocks),min(5,max(1,float(p.get('weight',1.5)))),min(500,max(1,int(p.get('depth',60)))),min(300,max(1,int(p.get('beam',25)))),**scenario_kwargs(p))
-        result['trace_coordinates']=[{'node':nodes[step['node']],'frontier':[nodes[u] for u in step['frontier'] if u in nodes]} for step in result.get('trace',[])];result.pop('trace',None);result['coordinates']=[nodes[x] for x in result.get('path',[])];result['explored_coordinates']=[nodes[x] for x in result.get('explored',[])];result['snapped_start']=nodes[start];result['snapped_end']=nodes[end];result['graph_nodes']=len(nodes);return jsonify(result)
+        result['trace_coordinates']=[{'node':nodes[step['node']],'frontier':[nodes[u] for u in step['frontier'] if u in nodes]} for step in result.get('trace',[])];result.pop('trace',None);result['coordinates']=[nodes[x] for x in result.get('path',[])];result['explored_coordinates']=[nodes[x] for x in result.get('explored',[])];result['snapped_start']=nodes[start];result['snapped_end']=nodes[end];result['graph_nodes']=len(nodes);result['graph_source']=g['source'];result['simulated']=g.get('simulated',False);return jsonify(result)
     except Exception as ex:return jsonify({'error':str(ex)}),400
 
 @app.get('/api/health')
-def health():return jsonify({'ok':True,'region':'Mirpur, Dhaka','graph_cached':bool(_CACHE['data'])})
+def health():return jsonify({'ok':True,'region':'Mirpur, Dhaka','graph_cached':bool(_CACHE['data']),'snapshot_available':os.path.isfile(SNAPSHOT),'data_source':_CACHE['data'].get('source') if _CACHE['data'] else None})
 
 if __name__=='__main__':app.run(debug=True,port=5000)
 
@@ -88,7 +136,7 @@ def compare():
         for alg in ('bfs','dfs','dls','ids','ucs','bidirectional','greedy','astar','weighted','beam'):
             r=route_search(g,start,goal,algorithm=alg,**opts)
             rows.append({k:r[k] for k in ('algorithm','expanded','distance','cost','eta_minutes','runtime_ms','frontier_peak','steps','optimality')})
-        return jsonify({'results':rows,'graph_nodes':len(nodes),'start':nodes[start],'end':nodes[goal]})
+        return jsonify({'results':rows,'graph_nodes':len(nodes),'graph_source':g['source'],'start':nodes[start],'end':nodes[goal]})
     except Exception as ex:return jsonify({'error':str(ex)}),400
 
 @app.post('/api/experiment')
@@ -107,7 +155,7 @@ def experiment():
             for alg in ('bfs','ucs','astar','greedy'):
                 r=route_search(g,start,goal,algorithm=alg,mode=p.get('mode','weighted'),traffic=float(p.get('traffic',.6)),risk=float(p.get('risk',.5)),blocked=blocked,allowed=allowed,**scenario_kwargs(p))
                 rows.append({'graph_size':len(allowed),'algorithm':alg,'distance':r['distance'],'cost':r['cost'],'eta_minutes':r['eta_minutes'],'expanded':r['expanded'],'runtime_ms':r['runtime_ms']})
-        return jsonify({'results':rows,'method':'Deterministic top-N geographic induced subgraph containing both selected endpoints. Disconnection is possible; null cost means no route. Timings are server runtime per run, not benchmark averages.','graph_nodes':len(nodes)})
+        return jsonify({'results':rows,'method':'Deterministic top-N geographic induced subgraph containing both selected endpoints. Disconnection is possible; null cost means no route. Timings are server runtime per run, not benchmark averages.','graph_nodes':len(nodes),'graph_source':g['source']})
     except Exception as ex:return jsonify({'error':str(ex)}),400
 
 
@@ -157,7 +205,7 @@ def benchmark_graphs():
                     'runtime':r['runtime_ms'],'found':dist is not None})
         return jsonify({'rows':rows,'basis':{'requested_nodes':count,'sample_nodes':len(allowed),
               'start':nodes[anchor],'goal':nodes[goal], 'pair_count':1,
-              'objective':objective,'source':'OpenStreetMap road geometry; simulated traffic and risk',
+              'objective':objective,'source':g['source']+'; simulated traffic and risk',
               'description':'Connected directed BFS sample from selected start. All 10 algorithms × three synthetic traffic levels; depth-limited searches can return N/A, and runtimes are single measurements.'}})
     except Exception as ex:
         return jsonify({'error':str(ex)}),400
