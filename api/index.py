@@ -153,7 +153,7 @@ def experiment():
         for item in p.get('blocks',[])[:30]:
             u=nearest(item);blocked.update(frozenset((u,v)) for v,*_ in g['edges'].get(u,[]))
         # Reproducible induced subgraphs around endpoints using a deterministic spatial ranking.
-        requested=min(1500,max(10,int(p.get('node_count',100))))
+        requested=min(10000,max(10,int(p.get('node_count',3000))))
         for size in dict.fromkeys((requested,100,500)):
             scored=sorted(nodes,key=lambda u:(distance(nodes[u],nodes[start])+distance(nodes[u],nodes[goal]),str(u)))
             allowed=set(scored[:size])|{start,goal}
@@ -170,7 +170,7 @@ def benchmark_graphs():
     try:
         p=request.get_json(force=True) or {}
         g=fetch_roads();nodes=g['nodes'];edges=g['edges']
-        count=min(1500,max(10,int(p.get('node_count',100))))
+        count=min(10000,max(10,int(p.get('node_count',3000))))
         objective=p.get('benchmark_objective','composite')
         if objective not in ('distance','time','safety','composite'):
             return jsonify({'error':'Invalid benchmark objective'}),400
