@@ -121,6 +121,11 @@ def route():
 @app.get('/api/health')
 def health():return jsonify({'ok':True,'region':'Mirpur, Dhaka','graph_cached':bool(_CACHE['data']),'snapshot_available':os.path.isfile(SNAPSHOT),'data_source':_CACHE['data'].get('source') if _CACHE['data'] else None})
 
+
+# ADVERSARIAL_PATCH_V1
+from api.adversarial import register as register_adversarial
+register_adversarial(app, fetch_roads)
+
 if __name__=='__main__':app.run(debug=True,port=5000)
 
 @app.post('/api/compare')
